@@ -1,0 +1,17 @@
+{
+  "name": "opencode-claude-quota",
+  "version": "1.0.0",
+  "description": "OpenCode plugin to display Claude Code quota/rate limit with progress bar",
+  "main": "src/index.ts",
+  "type": "module",
+  "keywords": ["opencode", "plugin", "claude", "quota", "rate-limit"],
+  "author": "",
+  "license": "MIT",
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

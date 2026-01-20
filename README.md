@@ -2,7 +2,7 @@
 
 A plugin for [OpenCode](https://github.com/sst/opencode) that displays your **real Claude.ai subscription quota** with progress bars.
 
-![Demo](https://img.shields.io/badge/Session-8%25-green) ![Demo](https://img.shields.io/badge/Weekly-28%25-green)
+![Demo](demo.png)
 
 ## Features
 

@@ -8,7 +8,6 @@ A plugin for [OpenCode](https://github.com/sst/opencode) that displays your **re
 
 - **Real quota from Claude.ai** - Fetches actual session (5-hour) and weekly (7-day) usage
 - **Visual progress bars** - Shows usage at a glance
-- **Per-model breakdown** - See Sonnet/Opus usage separately
 - **CLI tool included** - Check quota from terminal without OpenCode
 - **Local session tracking** - Also tracks tokens in current session
 
@@ -84,10 +83,13 @@ Resets in: 3h 58m
 [██████░░░░░░░░░░░░░░] **28%** used | **72%** remaining
 Resets in: 5d 0h
 
-### Per-Model Weekly Usage
-| Model | Used |
-|-------|------|
-| Sonnet | 3% |
+### Local Session Tracking
+| Metric | Value |
+|--------|-------|
+| Tokens Used | 15,234 |
+| Requests | 12 |
+| Session Time | 45 min |
+| Est. Cost | $0.0234 |
 ```
 
 ### CLI (Terminal)
@@ -118,9 +120,6 @@ node bin/cli.mjs
    [██████░░░░░░░░░░░░░░] 28% used
    Remaining: 72%  Resets in: 5d 0h
 
-🔤 PER-MODEL WEEKLY
-   Sonnet: [░░░░░░░░░░░░░░░] 3%
-
 ──────────────────────────────────────────
    Fetched at: 8:15:30 PM
 ```
@@ -134,9 +133,73 @@ node bin/cli.mjs
 
 ## How It Works
 
-1. **Reads OAuth credentials** from OpenCode's `auth.json` file
-2. **Calls Claude API** at `https://api.anthropic.com/api/oauth/usage`
-3. **Displays real quota** with visual progress bars
+### Architecture: 3 Independent Components
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    opencode-claude-quota                    │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  1. PLUGIN (.opencode/plugin/claude-quota.ts)               │
+│     └── Registers TOOL "quota" with OpenCode                │
+│         └── LLM calls this tool when user asks about quota  │
+│                                                             │
+│  2. COMMAND (.opencode/command/quota.md)                    │
+│     └── Slash command /quota                                │
+│         └── Just a prompt: "check my Claude quota"          │
+│         └── Triggers LLM → LLM calls quota tool             │
+│                                                             │
+│  3. CLI (bin/cli.mjs)                                       │
+│     └── Runs standalone from terminal                       │
+│         └── No OpenCode required                            │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Flow
+
+```
+User types "/quota" or "check my quota"
+        │
+        ▼
+┌───────────────────┐
+│  OpenCode (LLM)   │
+│  Claude/Gemini    │
+└────────┬──────────┘
+         │ LLM decides to call "quota" tool
+         ▼
+┌───────────────────┐
+│  PLUGIN           │
+│  claude-quota.ts  │
+└────────┬──────────┘
+         │ 1. Read auth.json (get access_token)
+         │ 2. Call Claude API: /api/oauth/usage
+         │ 3. Format result with progress bars
+         ▼
+┌───────────────────┐
+│  Return markdown  │
+│  display to user  │
+└───────────────────┘
+```
+
+### Component Summary
+
+| Component | File | Function |
+|-----------|------|----------|
+| **Plugin** | `claude-quota.ts` | Registers tool `quota` - LLM can call it |
+| **Command** | `quota.md` | Shortcut `/quota` → triggers LLM to ask about quota |
+| **CLI** | `cli.mjs` | Standalone terminal tool, no OpenCode needed |
+
+### Key Points
+
+- **Plugin** = registers a **tool** for LLM to use
+- **Command** = just a **prompt template**, no logic
+- **CLI** = **standalone**, copies logic from plugin
+
+When you type `/quota`:
+1. Command sends prompt "check quota" to LLM
+2. LLM sees tool `quota` available → calls tool
+3. Plugin runs, fetches API, returns result
 
 ### Auth File Locations
 

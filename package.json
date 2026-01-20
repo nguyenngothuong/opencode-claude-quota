@@ -1,12 +1,42 @@
 {
   "name": "opencode-claude-quota",
   "version": "1.0.0",
-  "description": "OpenCode plugin to display Claude Code quota/rate limit with progress bar",
+  "description": "OpenCode plugin to display Claude.ai subscription quota with progress bars. Includes CLI tool.",
   "main": "src/index.ts",
+  "bin": {
+    "claude-quota": "./bin/cli.mjs"
+  },
   "type": "module",
-  "keywords": ["opencode", "plugin", "claude", "quota", "rate-limit"],
-  "author": "",
+  "scripts": {
+    "quota": "node bin/cli.mjs"
+  },
+  "keywords": [
+    "opencode",
+    "claude",
+    "anthropic",
+    "quota",
+    "usage",
+    "rate-limit",
+    "plugin",
+    "cli"
+  ],
+  "author": "nguyenngothuong",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nguyenngothuong/opencode-claude-quota.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nguyenngothuong/opencode-claude-quota/issues"
+  },
+  "homepage": "https://github.com/nguyenngothuong/opencode-claude-quota#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "src/",
+    "bin/"
+  ],
   "peerDependencies": {
     "@opencode-ai/plugin": "*"
   },

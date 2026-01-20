@@ -2,7 +2,7 @@
  * Claude Quota Plugin
  *
  * Displays Claude Code subscription quota (Session & Weekly usage).
- * Reads OAuth credentials from OpenCode auth.json and fetches real quota from Claude.ai API.
+ * Provides `quota` tool for checking real quota from Claude.ai API.
  */
 
 import * as fs from "fs"
@@ -26,18 +26,10 @@ interface QuotaUsage {
 }
 
 interface ClaudeUsageResponse {
-  five_hour?: QuotaUsage // Session quota (5-hour window)
-  seven_day?: QuotaUsage // Weekly quota (all models combined)
+  five_hour?: QuotaUsage
+  seven_day?: QuotaUsage
   seven_day_sonnet?: QuotaUsage
   seven_day_opus?: QuotaUsage
-  seven_day_oauth_apps?: QuotaUsage | null
-  iguana_necktie?: unknown | null
-  extra_usage?: {
-    is_enabled: boolean
-    monthly_limit?: number | null
-    used_credits?: number | null
-    utilization?: number | null
-  }
 }
 
 interface LocalState {
@@ -50,54 +42,48 @@ interface LocalState {
 }
 
 // ============================================================================
-// Auth File Path (XDG Base Directory)
+// Global State
+// ============================================================================
+
+const localState: LocalState = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheTokens: 0,
+  cost: 0,
+  requests: 0,
+  sessionStart: Date.now(),
+}
+
+// ============================================================================
+// Auth File Path
 // ============================================================================
 
 function getAuthFilePath(): string {
-  // Try multiple possible locations
   const possiblePaths = [
-    // XDG_DATA_HOME if set
     process.env.XDG_DATA_HOME ? path.join(process.env.XDG_DATA_HOME, "opencode", "auth.json") : null,
-    // Linux/macOS/Windows with .local
     path.join(os.homedir(), ".local", "share", "opencode", "auth.json"),
-    // Windows AppData/Local
     process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "opencode", "auth.json") : null,
-    // Windows fallback
     path.join(os.homedir(), "AppData", "Local", "opencode", "auth.json"),
   ].filter(Boolean) as string[]
 
   for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
-      return p
-    }
+    if (fs.existsSync(p)) return p
   }
-
-  // Return default path for error message
   return possiblePaths[0] || path.join(os.homedir(), ".local", "share", "opencode", "auth.json")
 }
 
 async function getAnthropicAuth(): Promise<OAuthAuth | null> {
   try {
     const authPath = getAuthFilePath()
-    console.log(`[claude-quota] Reading auth from: ${authPath}`)
-
-    if (!fs.existsSync(authPath)) {
-      console.log("[claude-quota] Auth file not found")
-      return null
-    }
+    if (!fs.existsSync(authPath)) return null
 
     const content = fs.readFileSync(authPath, "utf-8")
     const authData = JSON.parse(content)
-
     const anthropicAuth = authData["anthropic"]
-    if (!anthropicAuth || anthropicAuth.type !== "oauth") {
-      console.log("[claude-quota] No OAuth auth for anthropic")
-      return null
-    }
 
+    if (!anthropicAuth || anthropicAuth.type !== "oauth") return null
     return anthropicAuth as OAuthAuth
-  } catch (error) {
-    console.log(`[claude-quota] Error reading auth: ${error}`)
+  } catch {
     return null
   }
 }
@@ -107,8 +93,8 @@ async function getAnthropicAuth(): Promise<OAuthAuth | null> {
 // ============================================================================
 
 function formatProgressBar(percentage: number, width: number = 20): string {
-  const clampedPercent = Math.min(100, Math.max(0, percentage))
-  const filled = Math.round((clampedPercent / 100) * width)
+  const clamped = Math.min(100, Math.max(0, percentage))
+  const filled = Math.round((clamped / 100) * width)
   const empty = width - filled
   return `[${"█".repeat(filled)}${"░".repeat(empty)}]`
 }
@@ -125,6 +111,10 @@ function formatTimeRemaining(resetTime: string | undefined): string {
     const hours = Math.floor(diffMs / (1000 * 60 * 60))
     const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60))
 
+    if (hours >= 24) {
+      const days = Math.floor(hours / 24)
+      return `${days}d ${hours % 24}h`
+    }
     if (hours > 0) return `${hours}h ${minutes}m`
     return `${minutes}m`
   } catch {
@@ -138,40 +128,27 @@ function formatTimeRemaining(resetTime: string | undefined): string {
 
 async function refreshAccessToken(auth: OAuthAuth): Promise<string | null> {
   const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-
   try {
-    console.log("[claude-quota] Refreshing access token...")
     const response = await fetch("https://console.anthropic.com/v1/oauth/token", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         grant_type: "refresh_token",
         refresh_token: auth.refresh,
         client_id: CLIENT_ID,
       }),
     })
-
-    if (!response.ok) {
-      console.log(`[claude-quota] Token refresh failed: ${response.status}`)
-      return null
-    }
-
+    if (!response.ok) return null
     const json = await response.json()
-    console.log("[claude-quota] Token refreshed successfully")
     return json.access_token
-  } catch (error) {
-    console.log(`[claude-quota] Token refresh error: ${error}`)
+  } catch {
     return null
   }
 }
 
 async function fetchClaudeUsage(accessToken: string): Promise<ClaudeUsageResponse | null> {
   try {
-    // Try OAuth usage endpoint first
-    console.log("[claude-quota] Fetching usage from OAuth endpoint...")
-    const oauthResponse = await fetch("https://api.anthropic.com/api/oauth/usage", {
+    const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
@@ -179,75 +156,28 @@ async function fetchClaudeUsage(accessToken: string): Promise<ClaudeUsageRespons
         "anthropic-beta": "oauth-2025-04-20",
       },
     })
-
-    if (oauthResponse.ok) {
-      const data = await oauthResponse.json()
-      console.log("[claude-quota] Got usage data from OAuth endpoint")
-      return data
-    }
-    console.log(`[claude-quota] OAuth usage API: ${oauthResponse.status}`)
-
-    // Fallback: Try claude.ai organizations endpoint
-    console.log("[claude-quota] Trying claude.ai organizations endpoint...")
-    const orgsResponse = await fetch("https://claude.ai/api/organizations", {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    })
-
-    if (!orgsResponse.ok) {
-      console.log(`[claude-quota] Orgs API: ${orgsResponse.status}`)
-      return null
-    }
-
-    const orgs = await orgsResponse.json()
-    if (!Array.isArray(orgs) || orgs.length === 0) {
-      console.log("[claude-quota] No organizations found")
-      return null
-    }
-
-    const orgId = orgs[0].uuid
-    console.log(`[claude-quota] Using org: ${orgId}`)
-
-    const usageResponse = await fetch(`https://claude.ai/api/organizations/${orgId}/usage`, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    })
-
-    if (!usageResponse.ok) {
-      console.log(`[claude-quota] Usage API: ${usageResponse.status}`)
-      return null
-    }
-
-    return await usageResponse.json()
-  } catch (error) {
-    console.log(`[claude-quota] Error fetching usage: ${error}`)
+    if (!response.ok) return null
+    return await response.json()
+  } catch {
     return null
   }
 }
 
-// ============================================================================
-// Local State (fallback tracking)
-// ============================================================================
+async function getQuotaData(): Promise<ClaudeUsageResponse | null> {
+  const auth = await getAnthropicAuth()
+  if (!auth) return null
 
-const localState: LocalState = {
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheTokens: 0,
-  cost: 0,
-  requests: 0,
-  sessionStart: Date.now(),
-}
+  let accessToken = auth.access
+  if (auth.expires < Date.now()) {
+    const newToken = await refreshAccessToken(auth)
+    if (newToken) accessToken = newToken
+  }
 
-function getTotalTokens(): number {
-  return localState.inputTokens + localState.outputTokens + localState.cacheTokens
+  return accessToken ? await fetchClaudeUsage(accessToken) : null
 }
 
 // ============================================================================
-// Plugin Export
+// Plugin Export (Simple format - no client dependency)
 // ============================================================================
 
 export const ClaudeQuotaPlugin = async () => {
@@ -263,17 +193,13 @@ export const ClaudeQuotaPlugin = async () => {
       if (!message.tokens) return
 
       const tokens = message.tokens
-
       localState.inputTokens += tokens.input || 0
       localState.outputTokens += tokens.output || 0
       localState.cacheTokens += (tokens.cache?.read || 0) + (tokens.cache?.write || 0)
       localState.cost += message.cost || 0
       localState.requests += 1
 
-      const total = getTotalTokens()
-      console.log(
-        `[claude-quota] #${localState.requests}: +${(tokens.input || 0) + (tokens.output || 0)} (total: ${total.toLocaleString()})`
-      )
+      console.log(`[claude-quota] Request #${localState.requests}: +${(tokens.input || 0) + (tokens.output || 0)} tokens`)
     },
 
     /**
@@ -286,101 +212,59 @@ export const ClaudeQuotaPlugin = async () => {
       localState.cost = 0
       localState.requests = 0
       localState.sessionStart = Date.now()
-      console.log("[claude-quota] State reset")
+      console.log("[claude-quota] State reset for new session")
     },
 
     /**
-     * Custom tools
+     * Custom Tools
      */
     tool: {
       quota: {
-        description:
-          "Check your Claude Code subscription quota. Shows session (5-hour) and weekly usage with progress bars from Claude.ai. Also displays local session token tracking.",
+        description: "Check your Claude Code subscription quota. Shows session (5-hour) and weekly usage with progress bars from Claude.ai API.",
         parameters: {},
         execute: async () => {
-          let claudeUsage: ClaudeUsageResponse | null = null
-          let quotaSection = ""
+          const quota = await getQuotaData()
 
-          // Try to get auth and fetch real quota
-          const auth = await getAnthropicAuth()
-          if (auth) {
-            // Check if token is expired
-            let accessToken = auth.access
-            if (auth.expires < Date.now()) {
-              const newToken = await refreshAccessToken(auth)
-              if (newToken) {
-                accessToken = newToken
-              }
-            }
-
-            if (accessToken) {
-              claudeUsage = await fetchClaudeUsage(accessToken)
-            }
-          }
-
-          if (claudeUsage) {
-            // Session (5-hour) quota
-            // Note: API returns utilization as percentage (0-100), not decimal (0-1)
-            const sessionUsed = Math.round(claudeUsage.five_hour?.utilization || 0)
-            const sessionRemaining = 100 - sessionUsed
-            const sessionResetIn = formatTimeRemaining(claudeUsage.five_hour?.resets_at)
+          if (quota) {
+            const sessionUsed = Math.round(quota.five_hour?.utilization || 0)
+            const weeklyUsed = Math.round(quota.seven_day?.utilization || 0)
             const sessionBar = formatProgressBar(sessionUsed)
-
-            // Weekly quota
-            const weeklyUsed = Math.round(claudeUsage.seven_day?.utilization || 0)
-            const weeklyRemaining = 100 - weeklyUsed
-            const weeklyResetIn = formatTimeRemaining(claudeUsage.seven_day?.resets_at)
             const weeklyBar = formatProgressBar(weeklyUsed)
+            const sessionReset = formatTimeRemaining(quota.five_hour?.resets_at)
+            const weeklyReset = formatTimeRemaining(quota.seven_day?.resets_at)
 
-            quotaSection = `
+            let output = `
 ## Claude Code Quota (from Claude.ai)
 
 ### Session (5-hour window)
-${sessionBar} **${sessionUsed}%** used | **${sessionRemaining}%** remaining
-Resets in: ${sessionResetIn}
+${sessionBar} **${sessionUsed}%** used | **${100 - sessionUsed}%** remaining
+Resets in: ${sessionReset}
 
 ### Weekly (All Models)
-${weeklyBar} **${weeklyUsed}%** used | **${weeklyRemaining}%** remaining
-Resets in: ${weeklyResetIn}
+${weeklyBar} **${weeklyUsed}%** used | **${100 - weeklyUsed}%** remaining
+Resets in: ${weeklyReset}
 `
 
-            // Add per-model breakdown if available
-            if (claudeUsage.seven_day_sonnet || claudeUsage.seven_day_opus) {
-              quotaSection += `
+            if (quota.seven_day_sonnet || quota.seven_day_opus) {
+              output += `
 ### Per-Model Weekly Usage
 | Model | Used |
 |-------|------|`
-              if (claudeUsage.seven_day_sonnet?.utilization !== undefined) {
-                quotaSection += `
-| Sonnet | ${Math.round(claudeUsage.seven_day_sonnet.utilization)}% |`
+              if (quota.seven_day_sonnet?.utilization !== undefined) {
+                output += `
+| Sonnet | ${Math.round(quota.seven_day_sonnet.utilization)}% |`
               }
-              if (claudeUsage.seven_day_opus?.utilization !== undefined) {
-                quotaSection += `
-| Opus | ${Math.round(claudeUsage.seven_day_opus.utilization)}% |`
+              if (quota.seven_day_opus?.utilization !== undefined) {
+                output += `
+| Opus | ${Math.round(quota.seven_day_opus.utilization)}% |`
               }
             }
-          } else {
-            quotaSection = `
-## Claude Code Quota
 
-Could not fetch quota from Claude.ai
+            const total = localState.inputTokens + localState.outputTokens + localState.cacheTokens
+            const sessionMinutes = Math.floor((Date.now() - localState.sessionStart) / 60000)
 
-Possible reasons:
-- Not logged in with Claude Pro/Max (OAuth)
-- Access token expired and refresh failed
-- API endpoint changed
+            output += `
 
-To see your actual quota:
-1. Visit https://claude.ai/settings
-2. Check "Usage summary" section
-`
-          }
-
-          // Local session tracking
-          const total = getTotalTokens()
-          const sessionMinutes = Math.floor((Date.now() - localState.sessionStart) / 60000)
-
-          const localSection = `
 ---
 
 ## Local Session Tracking
@@ -396,7 +280,25 @@ To see your actual quota:
 | Est. Cost | $${localState.cost.toFixed(4)} |
 `
 
-          return (quotaSection + localSection).trim()
+            return output.trim()
+          }
+
+          return `
+## Claude Code Quota
+
+Could not fetch quota from Claude.ai
+
+Possible reasons:
+- Not logged in with Claude Pro/Max (OAuth)
+- Access token expired and refresh failed
+- API endpoint changed
+
+To see your actual quota:
+1. Visit https://claude.ai/settings
+2. Check "Usage summary" section
+
+Or run in terminal: quota
+`.trim()
         },
       },
 
@@ -404,8 +306,9 @@ To see your actual quota:
         description: "Reset the local quota tracking counters",
         parameters: {},
         execute: async () => {
-          const oldTotal = getTotalTokens()
+          const oldTotal = localState.inputTokens + localState.outputTokens + localState.cacheTokens
           const oldCost = localState.cost
+
           localState.inputTokens = 0
           localState.outputTokens = 0
           localState.cacheTokens = 0

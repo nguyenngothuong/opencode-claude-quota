@@ -245,17 +245,6 @@ ${weeklyBar} **${weeklyUsed}%** used | **${100 - weeklyUsed}%** remaining
 Resets in: ${weeklyReset}
 `
 
-            // Always show both models
-            const sonnetUsed = Math.round(quota.seven_day_sonnet?.utilization || 0)
-            const opusUsed = Math.round(quota.seven_day_opus?.utilization || 0)
-            
-            output += `
-### Per-Model Weekly Usage
-| Model | Used |
-|-------|------|
-| Sonnet | ${sonnetUsed}% |
-| Opus | ${opusUsed}% |`
-
             const total = localState.inputTokens + localState.outputTokens + localState.cacheTokens
             const sessionMinutes = Math.floor((Date.now() - localState.sessionStart) / 60000)
 

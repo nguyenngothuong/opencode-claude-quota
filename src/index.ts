@@ -245,20 +245,16 @@ ${weeklyBar} **${weeklyUsed}%** used | **${100 - weeklyUsed}%** remaining
 Resets in: ${weeklyReset}
 `
 
-            if (quota.seven_day_sonnet || quota.seven_day_opus) {
-              output += `
+            // Always show both models
+            const sonnetUsed = Math.round(quota.seven_day_sonnet?.utilization || 0)
+            const opusUsed = Math.round(quota.seven_day_opus?.utilization || 0)
+            
+            output += `
 ### Per-Model Weekly Usage
 | Model | Used |
-|-------|------|`
-              if (quota.seven_day_sonnet?.utilization !== undefined) {
-                output += `
-| Sonnet | ${Math.round(quota.seven_day_sonnet.utilization)}% |`
-              }
-              if (quota.seven_day_opus?.utilization !== undefined) {
-                output += `
-| Opus | ${Math.round(quota.seven_day_opus.utilization)}% |`
-              }
-            }
+|-------|------|
+| Sonnet | ${sonnetUsed}% |
+| Opus | ${opusUsed}% |`
 
             const total = localState.inputTokens + localState.outputTokens + localState.cacheTokens
             const sessionMinutes = Math.floor((Date.now() - localState.sessionStart) / 60000)

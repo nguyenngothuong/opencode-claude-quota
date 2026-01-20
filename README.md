@@ -1,13 +1,18 @@
 # OpenCode Claude Quota Plugin
 
-A lightweight plugin for [OpenCode](https://github.com/sst/opencode) that tracks your Claude token usage in real-time with visual progress bars.
+A plugin for [OpenCode](https://github.com/sst/opencode) that displays your **real Claude.ai subscription quota** with progress bars by fetching data from the Claude API.
 
 ## Features
 
-- **Real-time token tracking** - Monitors input/output/cache/reasoning tokens
-- **Progress bar display** - Visual usage indicator shown after each response
-- **Custom tools** - `quota` for details, `quotaReset` to reset counters
-- **Configurable limits** - Set your own daily token budget
+- **Real quota from Claude.ai** - Fetches actual session (5-hour) and weekly usage from Claude's OAuth API
+- **Visual progress bars** - Shows usage at a glance
+- **Local tracking fallback** - Also tracks tokens locally per session
+- **Custom tools** - `quota` to check usage, `quotaReset` to reset local counters
+
+## Requirements
+
+- OpenCode with **Claude OAuth authentication** (Claude Pro/Max subscription)
+- The plugin reads credentials from OpenCode's `auth.json` file
 
 ## Installation
 
@@ -38,125 +43,102 @@ mkdir -Force "$env:USERPROFILE\.config\opencode\plugin"
 copy src\index.ts "$env:USERPROFILE\.config\opencode\plugin\claude-quota.ts"
 ```
 
-### Option C: npm install
-
-```bash
-npm install opencode-claude-quota
-```
-
-Add to your `opencode.json`:
-
-```json
-{
-  "plugin": ["opencode-claude-quota"]
-}
-```
-
 ## Usage
 
-Once installed, the plugin works automatically:
-
-1. **Automatic tracking** - Every Claude response is tracked
-2. **Toast notifications** - Progress bar appears after each completed response
-3. **Custom tools** - Agent can use `quota` tool to check usage
+Once installed, ask the assistant: **"check my quota"** or **"show quota"**
 
 ### Example Output
 
-**Toast notification (after each response):**
-```
-Claude Quota
-[████████████░░░░░░░░] 38% remaining | 620K used | $0.45
-```
-
-**Detailed breakdown (quota tool):**
 ```markdown
-## Claude Code Quota Usage
+## Claude Code Quota (from Claude.ai)
 
-### Session Stats
+### Session (5-hour window)
+[█░░░░░░░░░░░░░░░░░░░] **3%** used | **97%** remaining
+Resets in: 4h 32m
+
+### Weekly (All Models)
+[█████░░░░░░░░░░░░░░░] **27%** used | **73%** remaining
+Resets in: 5d 12h
+
+### Per-Model Weekly Usage
+| Model | Used |
+|-------|------|
+| Sonnet | 3% |
+
+---
+
+## Local Session Tracking
+
 | Metric | Value |
 |--------|-------|
-| Duration | 45 min |
+| Tokens Used | 125,432 |
+| Input | 89,234 |
+| Output | 36,198 |
+| Cache | 0 |
 | Requests | 12 |
-| Total Cost | $0.4523 |
-
-### Token Breakdown
-| Type | Count |
-|------|-------|
-| Input Tokens | 125,432 |
-| Output Tokens | 45,678 |
-| Reasoning Tokens | 0 |
-| Cache Read | 89,234 |
-| Cache Write | 12,000 |
-| **Total** | **272,344** |
-
-### Usage Progress
-[█████████░░░░░░░░░░░░░░░░░░░░░] 27.2% used
-
-- **Used**: 272K tokens
-- **Limit**: 1M tokens  
-- **Remaining**: ~728K tokens (73%)
+| Session Time | 45 min |
+| Est. Cost | $0.0523 |
 ```
 
-## Configuration
+## How It Works
 
-Customize in your `opencode.json`:
+1. **Reads OAuth credentials** from OpenCode's `auth.json` file
+2. **Calls Claude API** at `https://api.anthropic.com/api/oauth/usage`
+3. **Displays real quota** with session (5-hour) and weekly (7-day) limits
+4. **Falls back to local tracking** if API is unavailable
 
-```json
-{
-  "plugins": {
-    "claude-quota": {
-      "dailyTokenLimit": 1000000,
-      "showToastOnIdle": true,
-      "toastDuration": 5000,
-      "progressBarWidth": 20
-    }
-  }
-}
-```
+### Auth File Locations
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `dailyTokenLimit` | number | `1000000` | Your daily token budget |
-| `showToastOnIdle` | boolean | `true` | Show toast after each response |
-| `toastDuration` | number | `5000` | Toast display time (ms) |
-| `progressBarWidth` | number | `20` | Width of progress bar |
+The plugin searches for `auth.json` in these locations:
 
-## Claude Code Plans Reference
-
-Estimated daily token limits by plan:
-
-| Plan | Estimated Daily Limit | Suggested Config |
-|------|----------------------|------------------|
-| Pro | ~500K - 1M tokens | `1000000` |
-| Max | ~2M - 5M tokens | `3000000` |
-
-> **Note:** Actual limits vary based on usage patterns and Anthropic's fair use policies. Check your [Anthropic Console](https://console.anthropic.com) for accurate quota information.
+- `$XDG_DATA_HOME/opencode/auth.json`
+- `~/.local/share/opencode/auth.json`
+- `%LOCALAPPDATA%/opencode/auth.json` (Windows)
 
 ## Available Tools
 
 | Tool | Description |
 |------|-------------|
-| `quota` | Check current usage with detailed breakdown |
-| `quotaReset` | Reset all counters to zero |
+| `quota` | Check Claude.ai quota + local session stats |
+| `quotaReset` | Reset local tracking counters |
 
-## Limitations
+## API Response Format
 
-- **Local tracking only** - Tracks usage within OpenCode session, not actual Anthropic API quota
-- **Session-based** - Counters reset when OpenCode restarts
-- **Self-configured limits** - You must set limits based on your plan
+The plugin expects this response from Claude's OAuth usage API:
 
-## How It Works
+```json
+{
+  "five_hour": {
+    "utilization": 3.0,
+    "resets_at": "2026-01-20T16:59:59.631252+00:00"
+  },
+  "seven_day": {
+    "utilization": 27.0,
+    "resets_at": "2026-01-25T12:59:59.631274+00:00"
+  },
+  "seven_day_sonnet": {
+    "utilization": 3.0,
+    "resets_at": "2026-01-25T12:59:59.631282+00:00"
+  }
+}
+```
 
-The plugin hooks into OpenCode's event system:
+Note: `utilization` is a percentage (0-100), not a decimal.
 
-1. `message.updated` - Captures token counts from each assistant response
-2. `session.idle` - Displays toast notification with progress bar
-3. `session.created` - Resets counters for new session
+## Troubleshooting
+
+**"Could not fetch quota from Claude.ai"**
+- Make sure you're logged in with Claude Pro/Max via OAuth in OpenCode
+- Check that `auth.json` exists and contains `anthropic.type: "oauth"`
+- Access token might be expired - restart OpenCode to refresh
+
+**Plugin not loading**
+- Check OpenCode logs for `[claude-quota]` messages
+- Ensure the file is in `.opencode/plugin/` or `~/.config/opencode/plugin/`
 
 ## Contributing
 
 ```bash
-# Clone the repo
 git clone https://github.com/nguyenngothuong/opencode-claude-quota.git
 cd opencode-claude-quota
 
